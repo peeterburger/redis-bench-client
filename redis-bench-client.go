@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
-	"sort"
 	"strconv"
 	"time"
 
@@ -13,7 +13,6 @@ import (
 
 func main() {
 
-	// Building CLI Interface
 	var app = cli.NewApp()
 
 	app.Name = "redis-bench-client"
@@ -40,6 +39,9 @@ func main() {
 				cli.BoolFlag{
 					Name:  "silent",
 					Usage: "Hides all log information"},
+				cli.BoolFlag{
+					Name:  "middleware",
+					Usage: "Sends raw data to server, which then accesses the database instead"},
 			},
 			Action: func(c *cli.Context) error {
 				fmt.Fprintf(c.App.Writer, "Evaluating flags...\n")
@@ -50,36 +52,71 @@ func main() {
 				fmt.Fprintf(c.App.Writer, "[count] -> %d\n", c.Int("count"))
 				count := c.Int("count")
 
-				// fmt.Fprintf(c.App.Writer, "[silent] -> %b\n", c.Bool("silent"))
-				// silent := c.Bool("silent")
+				//fmt.Fprintf(c.App.Writer, "[silent] -> %d\n", c.Bool("silent"))
+				//silent := c.Bool("silent")
 
-				client := redis.NewClient(&redis.Options{
-					Addr:     host,
-					Password: "", // no password set
-					DB:       0,  // use default DB
-				})
+				fmt.Fprintf(c.App.Writer, "[middleware] -> %b\n", c.Bool("middleware"))
+				middleware := c.Bool("middleware")
 
-				fmt.Fprintf(c.App.Writer, "Connecting to %s... ", host)
-				pong, _ := client.Ping().Result()
-				fmt.Fprintf(c.App.Writer, pong)
+				if middleware {
 
-				fmt.Fprintf(c.App.Writer, "\n\n--- Benchmark Phase ---")
+					tcpAddr, err := net.ResolveTCPAddr("tcp4", host)
+					checkError(err)
 
-				t := time.Now()
+					conn, err := net.DialTCP("tcp", nil, tcpAddr)
+					checkError(err)
 
-				for i := 0; i <= count; i++ {
-					fmt.Fprintf(c.App.Writer, "\nSET -> key: %d, val: %d", i, i)
-					client.Set(strconv.Itoa(i), strconv.Itoa(i), 0)
+					t := time.Now()
+
+					for i := 0; i < count; i++ {
+						fmt.Fprintf(c.App.Writer, "\nSET -> key: %d, val: %d", i, i)
+						_, err = conn.Write([]byte(strconv.Itoa(i)))
+						checkError(err)
+					}
+
+					end := time.Since(t)
+
+					fmt.Fprintf(c.App.Writer, "\n\n --- Result ---\n")
+					fmt.Fprintf(c.App.Writer, "Total operations: %d\n", count)
+					fmt.Fprintf(c.App.Writer, "Total duration: %f s\n", end.Seconds())
+					fmt.Fprintf(c.App.Writer, "Average operations per second: %f O/s\n", float64(count)/end.Seconds())
+					fmt.Fprintf(c.App.Writer, "Average time per operation: %f s\n", end.Seconds()/float64(count))
+
+					os.Exit(0)
+
+				} else {
+
+					client := redis.NewClient(&redis.Options{
+						Addr:     host,
+						Password: "",
+						DB:       0,
+					})
+
+					fmt.Fprintf(c.App.Writer, "Connecting to %s... ", host)
+					pong, _ := client.Ping().Result()
+					fmt.Fprintf(c.App.Writer, pong)
+
+					fmt.Fprintf(c.App.Writer, "\n\n--- Benchmark Phase ---")
+
+					t := time.Now()
+
+					for i := 0; i < count; i++ {
+						fmt.Fprintf(c.App.Writer, "\nSET -> key: %d, val: %d", i, i)
+						client.Set(strconv.Itoa(i), strconv.Itoa(i), 0)
+					}
+
+					end := time.Since(t)
+
+					fmt.Fprintf(c.App.Writer, "\n\n --- Result ---\n")
+					fmt.Fprintf(c.App.Writer, "Total operations: %d\n", count)
+					fmt.Fprintf(c.App.Writer, "Total duration: %f s\n", end.Seconds())
+					fmt.Fprintf(c.App.Writer, "Average operations per second: %f O/s\n", float64(count)/end.Seconds())
+					fmt.Fprintf(c.App.Writer, "Average time per operation: %f s\n", end.Seconds()/float64(count))
+
 				}
 
-				end := time.Since(t)
-
-				fmt.Fprintf(c.App.Writer, "\n\n --- Result ---\n")
-				fmt.Fprintf(c.App.Writer, "Total operations: %d\n", count)
-				fmt.Fprintf(c.App.Writer, "Total duration: %f s\n", end.Seconds())
-				fmt.Fprintf(c.App.Writer, "Average operations per second: %f O/s\n", float64(count)/end.Seconds())
-				fmt.Fprintf(c.App.Writer, "Average time per operation: %f s\n", end.Seconds()/float64(count))
 				return nil
+
 			},
 		},
 	}
@@ -88,37 +125,12 @@ func main() {
 		fmt.Fprintf(c.App.Writer, "%q not implemented.\n", command)
 	}
 
-	sort.Sort(cli.FlagsByName(app.Flags))
-	sort.Sort(cli.CommandsByName(app.Commands))
-
 	_ = app.Run(os.Args)
+}
 
-	/*
-		client := redis.NewClient(&redis.Options{
-			Addr:     host,
-			Password: "", // no password set
-			DB:       0,  // use default DB
-		})
-
-		fmt.Print("\nConnecting to ", host, "...")
-		pong, _ := client.Ping().Result()
-		fmt.Println(pong)
-
-		fmt.Print("\n\n--- Benchmark Phase ---\n\n")
-
-		t := time.Now()
-
-		for i := 0; i < count; i++ {
-			fmt.Printf("\nSET -> key: %d, val: %d", i, i)
-			client.Set(strconv.Itoa(i), strconv.Itoa(i), 0)
-		}
-
-		end := time.Since(t)
-
-		fmt.Print("\n\n --- Bench --- \n\n")
-		fmt.Printf("Total operations: %d\n", count)
-		fmt.Printf("Total duration: %fs\n", end.Seconds())
-		fmt.Printf("Average operations per second: %fO/s\n", float64(count)/end.Seconds())
-		fmt.Printf("Average time per operation: %fs\n", end.Seconds()/float64(count))
-	*/
+func checkError(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
+		os.Exit(1)
+	}
 }
